@@ -2876,7 +2876,7 @@ g_tls_connection_base_constructed (GObject *object)
                 }
               g_free (cert_hash);
             }
-          g_object_unref (remote_addr);
+          g_clear_object (&remote_addr);
         }
       g_object_unref (base_conn);
     }
