@@ -115,29 +115,36 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
        err_code == SSL_ERROR_WANT_WRITE) &&
       blocking)
     {
-      if (my_error)
-        g_error_free (my_error);
-      return G_TLS_CONNECTION_BASE_TRY_AGAIN;
+      status = G_TLS_CONNECTION_BASE_TRY_AGAIN;
+      goto out;
     }
 
   if (err_code == SSL_ERROR_ZERO_RETURN)
-    return G_TLS_CONNECTION_BASE_OK;
+    {
+      status = G_TLS_CONNECTION_BASE_OK;
+      goto out;
+    }
 
   if (status == G_TLS_CONNECTION_BASE_OK ||
       status == G_TLS_CONNECTION_BASE_WOULD_BLOCK ||
       status == G_TLS_CONNECTION_BASE_TIMED_OUT)
     {
       if (my_error)
-        g_propagate_error (error, my_error);
-      return status;
+        {
+          g_propagate_error (error, my_error);
+          my_error = NULL;
+        }
+      goto out;
     }
+
+  g_assert (status == G_TLS_CONNECTION_BASE_ERROR);
 
   /* This case is documented that it may happen and that is perfectly fine */
   if (err_code == SSL_ERROR_SYSCALL &&
       (priv->shutting_down && (!my_error || g_error_matches (my_error, G_IO_ERROR, G_IO_ERROR_BROKEN_PIPE))))
     {
-      g_clear_error (&my_error);
-      return G_TLS_CONNECTION_BASE_OK;
+      status = G_TLS_CONNECTION_BASE_OK;
+      goto out;
     }
 
   err = ERR_get_error ();
@@ -148,8 +155,10 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
     {
       if (reason == SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE && my_error)
         {
+          status = G_TLS_CONNECTION_BASE_ERROR;
           g_propagate_error (error, my_error);
-          return G_TLS_CONNECTION_BASE_ERROR;
+          my_error = NULL;
+          goto out;
         }
       else if (reason == SSL_R_BAD_PACKET_LENGTH ||
                reason == SSL_R_UNKNOWN_ALERT_TYPE ||
@@ -159,10 +168,9 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
                reason == SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE ||
                reason == SSL_R_UNKNOWN_PROTOCOL)
         {
-          g_clear_error (&my_error);
           g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_NOT_TLS,
                        _("Peer failed to perform TLS handshake: %s"), ERR_reason_error_string (err));
-          return G_TLS_CONNECTION_BASE_ERROR;
+          goto out;
         }
     }
 
@@ -172,40 +180,36 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
    */
   if (reason == SSL_R_SHUTDOWN_WHILE_IN_INIT)
     {
-      g_clear_error (&my_error);
-      return G_TLS_CONNECTION_BASE_OK;
+      status = G_TLS_CONNECTION_BASE_OK;
+      goto out;
     }
 
   if (reason == SSL_R_PEER_DID_NOT_RETURN_A_CERTIFICATE || reason == SSL_R_TLSV13_ALERT_CERTIFICATE_REQUIRED)
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_CERTIFICATE_REQUIRED,
                            _("TLS connection peer did not send a certificate"));
-      return status;
+      goto out;
     }
 
   if (reason == SSL_R_CERTIFICATE_VERIFY_FAILED)
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
                            _("Unacceptable TLS certificate"));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (reason == SSL_R_TLSV1_ALERT_UNKNOWN_CA)
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
                            _("Unacceptable TLS certificate authority"));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (err_lib == ERR_LIB_RSA && reason == RSA_R_DIGEST_TOO_BIG_FOR_RSA_KEY)
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
                            _("Digest too big for RSA key"));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
 #if OPENSSL_VERSION_MAJOR >= 3
@@ -213,18 +217,23 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
     {
       if (g_tls_connection_get_require_close_notify (G_TLS_CONNECTION (openssl)))
         {
-          g_clear_error (&my_error);
           g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_EOF,
                                _("TLS connection closed unexpectedly"));
-          return G_TLS_CONNECTION_BASE_ERROR;
+          goto out;
         }
       else
-        return G_TLS_CONNECTION_BASE_OK;
+        {
+          status = G_TLS_CONNECTION_BASE_OK;
+          goto out;
+        }
     }
 #endif
 
   if (my_error)
-    g_propagate_error (error, my_error);
+    {
+      g_propagate_error (error, my_error);
+      my_error = NULL;
+    }
 
   if (ret == 0 && err == 0 && err_lib == 0 && err_code == SSL_ERROR_SYSCALL
       && (direction == G_IO_IN || direction == G_IO_OUT))
@@ -234,7 +243,10 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
        * - this is normally Early EOF condition
        */
       if (!g_tls_connection_get_require_close_notify (G_TLS_CONNECTION (openssl)))
-        return G_TLS_CONNECTION_BASE_OK;
+        {
+          status = G_TLS_CONNECTION_BASE_OK;
+          goto out;
+        }
 
       if (error && !*error)
         *error = g_error_new (G_TLS_ERROR, G_TLS_ERROR_EOF, _("%s: The connection is broken"), gettext (err_prefix));
@@ -242,7 +254,9 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
   else if (error && !*error)
     *error = g_error_new (G_TLS_ERROR, G_TLS_ERROR_MISC, "%s: %s", gettext (err_prefix), err_str);
 
-  return G_TLS_CONNECTION_BASE_ERROR;
+out:
+  g_clear_error (&my_error);
+  return status;
 }
 
 static GTlsConnectionBaseStatus
