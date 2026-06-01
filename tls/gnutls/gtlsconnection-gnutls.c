@@ -408,7 +408,10 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
    */
   if (ret == GNUTLS_E_AGAIN ||
       ret == GNUTLS_E_WARNING_ALERT_RECEIVED)
-    return G_TLS_CONNECTION_BASE_TRY_AGAIN;
+    {
+      status = G_TLS_CONNECTION_BASE_TRY_AGAIN;
+      goto out;
+    }
 
   status = g_tls_connection_base_pop_io (tls, direction, ret >= 0, &my_error);
   if (status == G_TLS_CONNECTION_BASE_OK ||
@@ -416,8 +419,11 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
       status == G_TLS_CONNECTION_BASE_TIMED_OUT)
     {
       if (my_error)
-        g_propagate_error (error, my_error);
-      return status;
+        {
+          g_propagate_error (error, my_error);
+          my_error = NULL;
+        }
+      goto out;
     }
 
   g_assert (status == G_TLS_CONNECTION_BASE_ERROR);
@@ -431,18 +437,16 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
         {
           g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_NOT_TLS,
                        _("Peer failed to perform TLS handshake: %s"), my_error->message);
-          g_clear_error (&my_error);
-          return G_TLS_CONNECTION_BASE_ERROR;
+          goto out;
         }
 
       if (ret == GNUTLS_E_UNEXPECTED_PACKET_LENGTH ||
           ret == GNUTLS_E_DECRYPTION_FAILED ||
           ret == GNUTLS_E_UNSUPPORTED_VERSION_PACKET)
         {
-          g_clear_error (&my_error);
           g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_NOT_TLS,
                        _("Peer failed to perform TLS handshake: %s"), gnutls_strerror (ret));
-          return G_TLS_CONNECTION_BASE_ERROR;
+          goto out;
         }
     }
 
@@ -450,21 +454,20 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
     {
       if (handshaking)
         {
-          g_clear_error (&my_error);
           g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_NOT_TLS,
                        _("Peer failed to perform TLS handshake: %s"), gnutls_strerror (ret));
-          return G_TLS_CONNECTION_BASE_ERROR;
+          goto out;
         }
 
       if (g_tls_connection_get_require_close_notify (G_TLS_CONNECTION (gnutls)))
         {
-          g_clear_error (&my_error);
           g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_EOF,
                                _("TLS connection closed unexpectedly"));
-          return G_TLS_CONNECTION_BASE_ERROR;
+          goto out;
         }
 
-      return G_TLS_CONNECTION_BASE_OK;
+      status = G_TLS_CONNECTION_BASE_OK;
+      goto out;
     }
 
   if (ret == GNUTLS_E_NO_CERTIFICATE_FOUND
@@ -473,58 +476,56 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
 #endif
           )
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_CERTIFICATE_REQUIRED,
                            _("TLS connection peer did not send a certificate"));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (ret == GNUTLS_E_CERTIFICATE_ERROR)
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
                            _("Unacceptable TLS certificate"));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (ret == GNUTLS_E_FATAL_ALERT_RECEIVED)
     {
-      g_clear_error (&my_error);
       g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_MISC,
                    _("Peer sent fatal TLS alert: %s"),
                    gnutls_alert_get_name (gnutls_alert_get (priv->session)));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (ret == GNUTLS_E_INAPPROPRIATE_FALLBACK)
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_TLS_ERROR,
                            G_TLS_ERROR_INAPPROPRIATE_FALLBACK,
                            _("Protocol version downgrade attack detected"));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (ret == GNUTLS_E_LARGE_PACKET)
     {
       guint mtu = gnutls_dtls_get_data_mtu (priv->session);
-      g_clear_error (&my_error);
       g_set_error (error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE,
                    ngettext ("Message is too large for DTLS connection; maximum is %u byte",
                              "Message is too large for DTLS connection; maximum is %u bytes", mtu), mtu);
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (ret == GNUTLS_E_TIMEDOUT)
     {
-      g_clear_error (&my_error);
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT,
                            _("The operation timed out"));
-      return G_TLS_CONNECTION_BASE_ERROR;
+      goto out;
     }
 
   if (error && my_error)
-    g_propagate_error (error, my_error);
+    {
+      g_propagate_error (error, my_error);
+      my_error = NULL;
+      goto out;
+    }
 
   if (error && !*error)
     {
@@ -532,7 +533,9 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
                             gettext (err_prefix), gnutls_strerror (ret));
     }
 
-  return G_TLS_CONNECTION_BASE_ERROR;
+out:
+  g_clear_error (&my_error);
+  return status;
 }
 
 #define BEGIN_GNUTLS_IO(gnutls, direction, timeout, cancellable)        \
