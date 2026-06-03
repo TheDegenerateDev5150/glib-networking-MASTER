@@ -419,10 +419,7 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
       status == G_TLS_CONNECTION_BASE_TIMED_OUT)
     {
       if (my_error)
-        {
-          g_propagate_error (error, my_error);
-          my_error = NULL;
-        }
+        g_propagate_error (error, g_steal_pointer (&my_error));
       goto out;
     }
 
@@ -522,8 +519,7 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
 
   if (error && my_error)
     {
-      g_propagate_error (error, my_error);
-      my_error = NULL;
+      g_propagate_error (error, g_steal_pointer (&my_error));
       goto out;
     }
 

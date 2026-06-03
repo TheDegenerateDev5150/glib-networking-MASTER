@@ -125,10 +125,7 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
       status == G_TLS_CONNECTION_BASE_TIMED_OUT)
     {
       if (my_error)
-        {
-          g_propagate_error (error, my_error);
-          my_error = NULL;
-        }
+        g_propagate_error (error, g_steal_pointer (&my_error));
       goto out;
     }
 
@@ -154,8 +151,7 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
       if (reason == SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE && my_error)
         {
           status = G_TLS_CONNECTION_BASE_ERROR;
-          g_propagate_error (error, my_error);
-          my_error = NULL;
+          g_propagate_error (error, g_steal_pointer (&my_error));
           goto out;
         }
       else if (reason == SSL_R_BAD_PACKET_LENGTH ||
@@ -228,10 +224,7 @@ end_openssl_io (GTlsConnectionOpenssl  *openssl,
 #endif
 
   if (my_error)
-    {
-      g_propagate_error (error, my_error);
-      my_error = NULL;
-    }
+    g_propagate_error (error, g_steal_pointer (&my_error));
 
   if (ret == 0 && err == 0 && err_lib == 0 && err_code == SSL_ERROR_SYSCALL
       && (direction == G_IO_IN || direction == G_IO_OUT))
